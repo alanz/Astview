@@ -14,11 +14,15 @@ import Language.Haskell.Exts.Annotated.Syntax
 import Language.Haskell.Exts.SrcLoc
 
 -- GHC as a library
+import qualified Bag           as GHC
 import qualified DynFlags      as GHC
 import qualified GHC           as GHC
 import qualified GHC.Paths     as GHC
 import qualified NameSet       as GHC
+import qualified OccName       as GHC
+import qualified RdrName       as GHC
 import qualified Outputable    as GHC
+import qualified Var           as GHC
 import System.IO.Unsafe (unsafePerformIO)
 
 -- import Language.Astview.DataTree (data2tree)
@@ -79,7 +83,9 @@ getDynFlags = do
       dflags <- GHC.getSessionDynFlags
       return dflags
 
-ppr = prettyprint
+
+mppr :: (GHC.Outputable a) => a -> String
+mppr = prettyprint
 
 prettyprint :: (GHC.Outputable a) => a -> String
 prettyprint = prettyprintdf df
@@ -157,20 +163,35 @@ data2treeS = data2treeStaged SYB.Parser
 -- data2treeStaged :: (Data a,Typeable a) => SYB.Stage -> a -> Tree String
 data2treeStaged :: (Data a) => SYB.Stage -> a -> Tree String
 data2treeStaged stage =
-  generic `ext1Q` list
-           `extQ` nameSet
-           `extQ` postTcType
-           `extQ` fixity
+  generic `ext1Q` list `extQ` ghcname `extQ` occName `extQ` srcSpan
+           `extQ` moduleName
+           `extQ` bagRdrName `extQ` bagName `extQ` bagVar
+           `extQ` nameSet `extQ` postTcType `extQ` fixity
   where generic :: Data a => a -> Tree String
         generic t = Node (showConstr (toConstr t)) (gmapQ (data2treeStaged stage) t)
 
-        -- list l    = Node ("[]") (gmapQ (data2treeStaged stage) l)
-        list l    = (Node ("[]") (map (data2treeStaged stage) l))
-        -- list l    = (Node ("[]") [])
+        list l    = (Node ("List:") (map (data2treeStaged stage) l))
 
---        list l     = indent n ++ "["
---                              ++ concat (intersperse "," (map (showData stage (n+1)) l)) ++ "]"
+        ghcname :: GHC.Name -> Tree String
+        ghcname x = (Node ("{Name: " ++ (mppr x) ++ "}") [])
 
+        occName :: GHC.OccName -> Tree String
+        occName x   = (Node ("{OccName: " ++ ((GHC.occNameString x)::String) ++"}") []) 
+
+        srcSpan :: GHC.SrcSpan -> Tree String
+        srcSpan x = (Node ("{"++ (mppr x) ++"}") [])
+
+        moduleName :: GHC.ModuleName -> Tree String
+        moduleName x = (Node ("{ModuleName: " ++ (mppr x) ++ "}") [])
+
+        bagRdrName:: GHC.Bag (GHC.Located (GHC.HsBind GHC.RdrName)) -> Tree String
+        bagRdrName x = Node ("Bag(Located (HsBind RdrName)): ")  [list $ GHC.bagToList x]
+
+        bagName:: GHC.Bag (GHC.Located (GHC.HsBind GHC.Name)) -> Tree String
+        bagName x = Node ("Bag(Located (HsBind Name)): ")  [list $ GHC.bagToList x]
+
+        bagVar    :: GHC.Bag (GHC.Located (GHC.HsBind GHC.Var)) -> Tree String
+        bagVar x = Node ("Bag(Located (HsBind Var)): ")  [list $ GHC.bagToList x]
 
         nameSet | stage `elem` [SYB.Parser,SYB.TypeChecker]
                 = const ( Node "{!NameSet placeholder here!}" []) :: GHC.NameSet -> Tree String
@@ -187,7 +208,7 @@ data2treeStaged stage =
         fixity | stage<SYB.Renamer = const (Node "{!fixity placeholder here?!}" []) :: GHC.Fixity -> Tree String
                -- | otherwise     = ("{Fixity: "++) . (++"}") . show
                -- | otherwise     = const (Node ( ("{Fixity: "++) . (++"}") . show) [])
-               | otherwise     = \x -> (Node ( "{Fixity: "++ (ppr x) ++"}") [])
+               | otherwise     = \x -> (Node ( "{Fixity: "++ (mppr x) ++"}") [])
 
 -- ---------------------------------------------------------------------
 -- From
