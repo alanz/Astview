@@ -14,10 +14,12 @@ module Language.Astview.Languages where
 import Language.Astview.Language 
 
 import Haskell  -- requires haskell-src-exts
+import HaskellGhc
 
 -- | Main export for dynamic interpretation by astview
 knownLanguages :: [Language]
-knownLanguages = [haskellexts]
+-- knownLanguages = [haskellexts]
+knownLanguages = [haskellghc]
 
 {-
 -- --------------------------------------------------------

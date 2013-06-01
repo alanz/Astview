@@ -37,6 +37,12 @@ Library
                    , gio 
                    , haskell-src-exts >= 1.9.0
                    , syb
+                   -- for GHC 
+                   , ghc
+                   , ghc-paths
+                   , ghc-prim
+                   , ghc-syb-utils
+
   extensions:      ExistentialQuantification,
                    DeriveDataTypeable
 
