@@ -18,12 +18,13 @@ import qualified DynFlags      as GHC
 import qualified GHC           as GHC
 import qualified GHC.Paths     as GHC
 import qualified NameSet       as GHC
--- import qualified Outputable    as GHC
+import qualified Outputable    as GHC
 import System.IO.Unsafe (unsafePerformIO)
 
 -- import Language.Astview.DataTree (data2tree)
 -- syb
 import Data.Generics (Data
+                     ,ext1Q
                      ,extQ
                      ,gmapQ
                      ,showConstr
@@ -39,7 +40,8 @@ haskellghc = Language
   "Haskell"
   [".hs",".lhs"]
   parHaskellGhc
-  (data2treeGhc::(GHC.Located (GHC.HsModule GHC.RdrName)) ->Tree String)
+  -- (data2treeGhc::(GHC.Located (GHC.HsModule GHC.RdrName)) ->Tree String)
+  (data2treeS::(GHC.Located (GHC.HsModule GHC.RdrName)) ->Tree String)
   toSrcLoc
 
 parHaskell :: String -> Either Error (Module SrcSpan)
@@ -77,6 +79,20 @@ getDynFlags = do
       dflags <- GHC.getSessionDynFlags
       return dflags
 
+ppr = prettyprint
+
+prettyprint :: (GHC.Outputable a) => a -> String
+prettyprint = prettyprintdf df
+  where
+    df = unsafePerformIO getDynFlags
+
+prettyprintdf :: (GHC.Outputable a) => GHC.DynFlags -> a -> String
+#if __GLASGOW_HASKELL__ > 704
+prettyprintdf df x = GHC.renderWithStyle df (GHC.ppr x) (GHC.mkUserStyle GHC.neverQualify GHC.AllTheWay)
+#else
+prettyprintdf df x = GHC.renderWithStyle    (GHC.ppr x) (GHC.mkUserStyle GHC.neverQualify GHC.AllTheWay)
+#endif
+
 
 
 toSrcLoc :: Tree String -> Maybe SrcLoc.SrcLocation
@@ -98,16 +114,14 @@ data2tree = gdefault `extQ` atString
     gdefault x = Node (showConstr $ toConstr x) (gmapQ data2tree x)
 
 data2treeGhc :: Data a => a -> Tree String
--- data2treeGhc v = Node "vvv" []
-{- -}
 data2treeGhc v
-  | checkItemParser v = Node "vvv" []
+  | checkItemParser v = Node "*not populated*" []
   | otherwise = (gdefault `extQ` atString) v
   where
     atString x = Node x []
     gdefault x = Node (showConstr $ toConstr x) (gmapQ data2treeGhc x)
-{- -}
 
+-- ---------------------------------------------------------------------
 -- | Checks whether the current item is undesirable for analysis in the current
 -- AST Stage.
 checkItemStage :: Typeable a => SYB.Stage -> a -> Bool
@@ -122,9 +136,107 @@ checkItemRenamer x = checkItemStage SYB.Renamer x
 checkItemParser :: Typeable a => a -> Bool
 checkItemParser x = checkItemStage SYB.Parser x
 
+-- ---------------------------------------------------------------------
+
+data2treeGhc' :: Data a => a -> Tree String
+data2treeGhc' v
+  | checkItemParser v = Node "*not populated*" []
+  | otherwise = (gdefault `extQ` atString) v
+  where
+    atString x = Node x []
+    gdefault x = Node (showConstr $ toConstr x) (gmapQ data2treeGhc' x)
+
+
+
+--  extQ :: (Typeable a, Typeable b) => (a -> q) -> (                      b -> q) -> a -> q
+-- ext1Q :: (Data a,    Typeable1 t) => (a -> q) -> (forall e. Data e => t e -> q) -> a -> q
+
+data2treeS :: (Data a) => a -> Tree String
+data2treeS = data2treeStaged SYB.Parser
+
+-- data2treeStaged :: (Data a,Typeable a) => SYB.Stage -> a -> Tree String
+data2treeStaged :: (Data a) => SYB.Stage -> a -> Tree String
+data2treeStaged stage =
+  generic `ext1Q` list
+           `extQ` nameSet
+           `extQ` postTcType
+           `extQ` fixity
+  where generic :: Data a => a -> Tree String
+        generic t = Node (showConstr (toConstr t)) (gmapQ (data2treeStaged stage) t)
+
+        -- list l    = Node ("[]") (gmapQ (data2treeStaged stage) l)
+        list l    = (Node ("[]") (map (data2treeStaged stage) l))
+        -- list l    = (Node ("[]") [])
+
+--        list l     = indent n ++ "["
+--                              ++ concat (intersperse "," (map (showData stage (n+1)) l)) ++ "]"
+
+
+        nameSet | stage `elem` [SYB.Parser,SYB.TypeChecker]
+                = const ( Node "{!NameSet placeholder here!}" []) :: GHC.NameSet -> Tree String
+                | otherwise
+                -- = ("{NameSet: "++) . (++"}") . list . nameSetToList
+                = const (Node (("{NameSet: }") ) [])
+
+        postTcType | stage<SYB.TypeChecker = const (Node "{!type placeholder here?!}" []) :: GHC.PostTcType -> Tree String
+                   -- | otherwise     = showSDoc_ . ppr :: Type -> String
+                   -- | otherwise     = const (Node (SYB.showSDoc_ . ppr) []) :: GHC.Type -> Tree String
+                   -- | otherwise     = const ((Node (SYB.showSDoc_ $ GHC.ppr x) [])) --  :: GHC.PostTcType -> Tree String
+                   | otherwise     = \x -> ((Node (SYB.showSDoc_ $ GHC.ppr x) [])) 
+
+        fixity | stage<SYB.Renamer = const (Node "{!fixity placeholder here?!}" []) :: GHC.Fixity -> Tree String
+               -- | otherwise     = ("{Fixity: "++) . (++"}") . show
+               -- | otherwise     = const (Node ( ("{Fixity: "++) . (++"}") . show) [])
+               | otherwise     = \x -> (Node ( "{Fixity: "++ (ppr x) ++"}") [])
+
+-- ---------------------------------------------------------------------
+-- From
+-- http://hackage.haskell.org/packages/archive/ghc-syb-utils/0.2.1.1/doc/html/src/GHC-SYB-Utils.html#showData
 {-
-everythingStaged :: SYB.Stage -> (r -> r -> r) -> r -> SYB.GenericQ r -> SYB.GenericQ r
-everythingStaged stage k z f x
-  | checkItemStage stage x = z
-  | otherwise = foldl k (f x) (gmapQ (everythingStaged stage k z f) x)
+-- | Generic Data-based show, with special cases for GHC Ast types,
+--   and simplistic indentation-based layout (the 'Int' parameter);
+--   showing abstract types abstractly and avoiding known potholes
+--   (based on the 'Stage' that generated the Ast)
+showData :: Data a => Stage -> Int -> a -> String
+showData stage n =
+  generic `ext1Q` list `extQ` string `extQ` fastString `extQ` srcSpan
+          `extQ` name `extQ` occName `extQ` moduleName `extQ` var `extQ` dataCon
+          `extQ` bagName `extQ` bagRdrName `extQ` bagVar `extQ` nameSet
+          `extQ` postTcType `extQ` fixity
+  where generic :: Data a => a -> String
+        generic t = indent n ++ "(" ++ showConstr (toConstr t)
+                 ++ space (concat (intersperse " " (gmapQ (showData stage (n+1)) t))) ++ ")"
+        space "" = ""
+        space s  = ' ':s
+        indent n = "\n" ++ replicate n ' '
+        string     = show :: String -> String
+        fastString = ("{FastString: "++) . (++"}") . show :: FastString -> String
+        list l     = indent n ++ "["
+                              ++ concat (intersperse "," (map (showData stage (n+1)) l)) ++ "]"
+
+        name       = ("{Name: "++) . (++"}") . showSDoc_ . ppr :: Name -> String
+        occName    = ("{OccName: "++) . (++"}") .  OccName.occNameString
+        moduleName = ("{ModuleName: "++) . (++"}") . showSDoc_ . ppr :: ModuleName -> String
+        srcSpan    = ("{"++) . (++"}") . showSDoc_ . ppr :: SrcSpan -> String
+        var        = ("{Var: "++) . (++"}") . showSDoc_ . ppr :: Var -> String
+        dataCon    = ("{DataCon: "++) . (++"}") . showSDoc_ . ppr :: DataCon -> String
+
+        bagRdrName:: Bag (Located (HsBind RdrName)) -> String
+        bagRdrName = ("{Bag(Located (HsBind RdrName)): "++) . (++"}") . list . bagToList 
+        bagName   :: Bag (Located (HsBind Name)) -> String
+        bagName    = ("{Bag(Located (HsBind Name)): "++) . (++"}") . list . bagToList 
+        bagVar    :: Bag (Located (HsBind Var)) -> String
+        bagVar     = ("{Bag(Located (HsBind Var)): "++) . (++"}") . list . bagToList 
+
+        nameSet | stage `elem` [Parser,TypeChecker]
+                = const ("{!NameSet placeholder here!}") :: NameSet -> String
+                | otherwise
+                = ("{NameSet: "++) . (++"}") . list . nameSetToList
+
+        postTcType | stage<TypeChecker = const "{!type placeholder here?!}" :: PostTcType -> String
+                   | otherwise     = showSDoc_ . ppr :: Type -> String
+
+        fixity | stage<Renamer = const "{!fixity placeholder here?!}" :: GHC.Fixity -> String
+               | otherwise     = ("{Fixity: "++) . (++"}") . show
 -}
+
