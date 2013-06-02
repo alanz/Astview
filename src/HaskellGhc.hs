@@ -166,6 +166,7 @@ data2treeStaged stage =
   generic `ext1Q` list `extQ` ghcname `extQ` occName `extQ` srcSpan
            `extQ` moduleName
            `extQ` bagRdrName `extQ` bagName `extQ` bagVar
+           `extQ` overLit
            `extQ` nameSet `extQ` postTcType `extQ` fixity
   where generic :: Data a => a -> Tree String
         generic t = Node (showConstr (toConstr t)) (gmapQ (data2treeStaged stage) t)
@@ -178,8 +179,10 @@ data2treeStaged stage =
         occName :: GHC.OccName -> Tree String
         occName x   = (Node ("{OccName: " ++ ((GHC.occNameString x)::String) ++"}") []) 
 
+        -- srcSpan :: GHC.SrcSpan -> Tree String
+        -- srcSpan x = (Node ("{"++ (mppr x) ++"}") [])
         srcSpan :: GHC.SrcSpan -> Tree String
-        srcSpan x = (Node ("{"++ (mppr x) ++"}") [])
+        srcSpan x = (Node "SrcSpan" (srcSpanToSubTrees x))
 
         moduleName :: GHC.ModuleName -> Tree String
         moduleName x = (Node ("{ModuleName: " ++ (mppr x) ++ "}") [])
@@ -193,6 +196,9 @@ data2treeStaged stage =
         bagVar    :: GHC.Bag (GHC.Located (GHC.HsBind GHC.Var)) -> Tree String
         bagVar x = Node ("Bag(Located (HsBind Var)): ")  [list $ GHC.bagToList x]
 
+        overLit | stage <SYB.TypeChecker = const (Node "{!noRebinadbleInfo placeholder here?!}" []) :: GHC.HsOverLit GHC.RdrName -> Tree String
+                | otherwise = \x -> ((Node (SYB.showSDoc_ $ GHC.ppr x) []))
+
         nameSet | stage `elem` [SYB.Parser,SYB.TypeChecker]
                 = const ( Node "{!NameSet placeholder here!}" []) :: GHC.NameSet -> Tree String
                 | otherwise
@@ -200,15 +206,22 @@ data2treeStaged stage =
                 = const (Node (("{NameSet: }") ) [])
 
         postTcType | stage<SYB.TypeChecker = const (Node "{!type placeholder here?!}" []) :: GHC.PostTcType -> Tree String
-                   -- | otherwise     = showSDoc_ . ppr :: Type -> String
-                   -- | otherwise     = const (Node (SYB.showSDoc_ . ppr) []) :: GHC.Type -> Tree String
-                   -- | otherwise     = const ((Node (SYB.showSDoc_ $ GHC.ppr x) [])) --  :: GHC.PostTcType -> Tree String
                    | otherwise     = \x -> ((Node (SYB.showSDoc_ $ GHC.ppr x) [])) 
 
         fixity | stage<SYB.Renamer = const (Node "{!fixity placeholder here?!}" []) :: GHC.Fixity -> Tree String
                -- | otherwise     = ("{Fixity: "++) . (++"}") . show
                -- | otherwise     = const (Node ( ("{Fixity: "++) . (++"}") . show) [])
                | otherwise     = \x -> (Node ( "{Fixity: "++ (mppr x) ++"}") [])
+
+-- |Create parsable sub-trees to enable linking the source code to the tree
+srcSpanToSubTrees :: GHC.SrcSpan -> [Tree String]
+srcSpanToSubTrees (GHC.RealSrcSpan ss) =
+  [ Node (show $ GHC.srcSpanStartLine ss) []
+  , Node (show $ GHC.srcSpanStartCol  ss) []
+  , Node (show $ GHC.srcSpanEndLine   ss) []
+  , Node (show $ GHC.srcSpanEndCol    ss) []
+  ]
+srcSpanToSubTrees _ = replicate 4 (Node "-1" [])
 
 -- ---------------------------------------------------------------------
 -- From
